@@ -93,6 +93,7 @@ struct _GstCoreAudio
   gint stream_idx;
   gboolean io_proc_active;
   gboolean io_proc_needs_deactivation;
+  gboolean is_voice;
 
   /* For LPCM in/out */
   AudioUnit audiounit;

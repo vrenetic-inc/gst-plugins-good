@@ -20,13 +20,14 @@
  *
  */
 
-#import <AudioUnit/AUComponent.h>
+#import <AudioUnit/AudioUnit.h>
 
 static gboolean
 gst_core_audio_open_impl (GstCoreAudio * core_audio)
 {
-  return gst_core_audio_open_device (core_audio, kAudioUnitSubType_RemoteIO,
-      "RemoteIO");
+  OSType type = core_audio->is_voice ? kAudioUnitSubType_VoiceProcessingIO : kAudioUnitSubType_RemoteIO;
+  const gchar *desc = core_audio->is_voice ? "VoiceProcessingIO" : "RemoteIO";
+  return gst_core_audio_open_device (core_audio, type, desc);
 }
 
 static gboolean

@@ -88,7 +88,8 @@ enum
 {
   ARG_0,
   ARG_DEVICE,
-  ARG_VOLUME
+  ARG_VOLUME,
+  ARG_IS_VOICE
 };
 
 #define DEFAULT_VOLUME 1.0
@@ -181,6 +182,10 @@ gst_osx_audio_sink_class_init (GstOsxAudioSinkClass * klass)
   g_object_class_install_property (gobject_class, ARG_VOLUME,
       g_param_spec_double ("volume", "Volume", "Volume of this stream",
           0, 1.0, 1.0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+    
+  g_object_class_install_property(gobject_class, ARG_IS_VOICE,
+      g_param_spec_boolean("voice", "Voice", "Voice processing mode",
+          FALSE, G_PARAM_READWRITE));
 
   gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_osx_audio_sink_getcaps);
 
@@ -221,6 +226,9 @@ gst_osx_audio_sink_set_property (GObject * object, guint prop_id,
     case ARG_VOLUME:
       sink->volume = g_value_get_double (value);
       gst_osx_audio_sink_set_volume (sink);
+      break;
+    case ARG_IS_VOICE:
+      sink->is_voice = g_value_get_boolean(value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -280,6 +288,9 @@ gst_osx_audio_sink_get_property (GObject * object, guint prop_id,
 #endif
     case ARG_VOLUME:
       g_value_set_double (value, sink->volume);
+      break;
+    case ARG_IS_VOICE:
+      g_value_set_boolean (value, sink->is_voice);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -458,8 +469,8 @@ gst_osx_audio_sink_sink_payload (GstAudioBaseSink * sink, GstBuffer * buf)
     gst_buffer_map (out, &outmap, GST_MAP_WRITE);
 
     /* FIXME: the endianness needs to be queried and then set */
-    res = gst_audio_iec61937_payload (inmap.data, inmap.size,
-        outmap.data, outmap.size, &sink->ringbuffer->spec, G_BIG_ENDIAN);
+    res = gst_audio_iec61937_payload (inmap.data, (guint)inmap.size,
+        outmap.data, (guint)outmap.size, &sink->ringbuffer->spec, G_BIG_ENDIAN);
 
     gst_buffer_unmap (buf, &inmap);
     gst_buffer_unmap (out, &outmap);
@@ -494,6 +505,7 @@ gst_osx_audio_sink_create_ringbuffer (GstAudioBaseSink * sink)
   ringbuffer->core_audio->element =
       GST_OSX_AUDIO_ELEMENT_GET_INTERFACE (osxsink);
   ringbuffer->core_audio->is_src = FALSE;
+  ringbuffer->core_audio->is_voice = osxsink->is_voice;
 
   /* By default the coreaudio instance created by the ringbuffer
    * has device_id==kAudioDeviceUnknown. The user might have

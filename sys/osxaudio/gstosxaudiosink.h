@@ -87,6 +87,7 @@ struct _GstOsxAudioSink
   double volume;
 
   guint channels;
+  gboolean is_voice;
 };
 
 struct _GstOsxAudioSinkClass

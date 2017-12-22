@@ -52,7 +52,7 @@
 #include <gst/gst.h>
 #include <gst/audio/audio.h>
 #include <gst/audio/gstaudioringbuffer.h>
-#include <gstosxcoreaudio.h>
+#include "gstosxcoreaudio.h"
 
 
 G_BEGIN_DECLS
