@@ -76,7 +76,8 @@ enum
 enum
 {
   ARG_0,
-  ARG_DEVICE
+  ARG_DEVICE,
+  ARG_IS_VOICE
 };
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
@@ -148,6 +149,10 @@ gst_osx_audio_src_class_init (GstOsxAudioSrcClass * klass)
   g_object_class_install_property (gobject_class, ARG_DEVICE,
       g_param_spec_int ("device", "Device ID", "Device ID of input device",
           0, G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+    
+  g_object_class_install_property(gobject_class, ARG_IS_VOICE,
+      g_param_spec_boolean("voice", "Voice", "Voice processing mode",
+          FALSE, G_PARAM_READWRITE));
 
   gstaudiobasesrc_class->create_ringbuffer =
       GST_DEBUG_FUNCPTR (gst_osx_audio_src_create_ringbuffer);
@@ -178,6 +183,9 @@ gst_osx_audio_src_set_property (GObject * object, guint prop_id,
     case ARG_DEVICE:
       src->device_id = g_value_get_int (value);
       break;
+    case ARG_IS_VOICE:
+      src->is_voice = g_value_get_boolean(value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -193,6 +201,9 @@ gst_osx_audio_src_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case ARG_DEVICE:
       g_value_set_int (value, src->device_id);
+      break;
+    case ARG_IS_VOICE:
+      g_value_set_boolean (value, src->is_voice);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -315,6 +326,7 @@ gst_osx_audio_src_create_ringbuffer (GstAudioBaseSrc * src)
   ringbuffer->core_audio->element =
       GST_OSX_AUDIO_ELEMENT_GET_INTERFACE (osxsrc);
   ringbuffer->core_audio->is_src = TRUE;
+  ringbuffer->core_audio->is_voice = osxsrc->is_voice;
 
   /* By default the coreaudio instance created by the ringbuffer
    * has device_id==kAudioDeviceUnknown. The user might have
