@@ -292,7 +292,7 @@ gst_core_audio_set_channel_layout (GstCoreAudio * core_audio,
    * Reordering between the inner scope and outer scope is handled
    * by the Audio Unit itself. */
   ret = _core_audio_set_property (core_audio,
-      kAudioUnitProperty_AudioChannelLayout, layout, layoutSize);
+      kAudioUnitProperty_AudioChannelLayout, layout, (UInt32)layoutSize);
 
   g_free (layout);
   return ret;
