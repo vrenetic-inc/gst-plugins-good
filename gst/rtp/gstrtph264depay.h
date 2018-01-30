@@ -45,6 +45,7 @@ struct _GstRtpH264Depay
   GstRTPBaseDepayload depayload;
 
   gboolean    byte_stream;
+  gboolean    drop_after_gap;
 
   GstBuffer  *codec_data;
   GstAdapter *adapter;
@@ -56,11 +57,16 @@ struct _GstRtpH264Depay
   gboolean    picture_start;
   GstClockTime last_ts;
   gboolean    last_keyframe;
+  GstClockTime last_keyframe_ts;
 
   /* Work around broken payloaders wrt. FU-A & FU-B */
   guint8 current_fu_type;
   GstClockTime fu_timestamp;
   gboolean fu_marker;
+
+  /* lost packet */
+  guint lost_seq;
+  GstClockTime lost_ts;
 
   /* misc */
   GPtrArray *sps;
