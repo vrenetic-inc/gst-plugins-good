@@ -1261,6 +1261,10 @@ gst_rtp_h264_depay_handle_event (GstRTPBaseDepayload * depay, GstEvent * event)
 
         rtph264depay->lost_seq = seq;
         rtph264depay->lost_ts = ts;
+
+        gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
+            gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+                gst_structure_new_empty ("GstForceKeyUnit")));
       }
       break;
     }
