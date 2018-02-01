@@ -99,6 +99,8 @@ static gboolean gst_rtp_h264_depay_setcaps (GstRTPBaseDepayload * filter,
     GstCaps * caps);
 static gboolean gst_rtp_h264_depay_handle_event (GstRTPBaseDepayload * depay,
     GstEvent * event);
+static gboolean gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay,
+    GstEvent * event);
 
 static void gst_rtp_h264_depay_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -132,6 +134,7 @@ gst_rtp_h264_depay_class_init (GstRtpH264DepayClass * klass)
   gstrtpbasedepayload_class->process_rtp_packet = gst_rtp_h264_depay_process;
   gstrtpbasedepayload_class->set_caps = gst_rtp_h264_depay_setcaps;
   gstrtpbasedepayload_class->handle_event = gst_rtp_h264_depay_handle_event;
+  gstrtpbasedepayload_class->packet_lost = gst_rtp_h264_depay_packet_lost;
 
   gobject_class->set_property = gst_rtp_h264_depay_set_property;
   gobject_class->get_property = gst_rtp_h264_depay_get_property;
@@ -1247,27 +1250,6 @@ gst_rtp_h264_depay_handle_event (GstRTPBaseDepayload * depay, GstEvent * event)
     case GST_EVENT_FLUSH_STOP:
       gst_rtp_h264_depay_reset (rtph264depay);
       break;
-    case GST_EVENT_CUSTOM_DOWNSTREAM:
-    {
-      const GstStructure *structure = gst_event_get_structure (event);
-
-      if (gst_structure_has_name (structure, "GstRTPPacketLost")) {
-        GstRtpH264Depay *rtph264depay = GST_RTP_H264_DEPAY (depay);
-        GstClockTime ts = 0;
-        guint seq = 0;
-
-        gst_structure_get_uint (structure, "seqnum", &seq);
-        gst_structure_get_uint64 (structure, "timestamp", &ts);
-
-        rtph264depay->lost_seq = seq;
-        rtph264depay->lost_ts = ts;
-
-        gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
-            gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-                gst_structure_new_empty ("GstForceKeyUnit")));
-      }
-      break;
-    }
     default:
       break;
   }
@@ -1350,4 +1332,25 @@ gst_rtp_h264_depay_plugin_init (GstPlugin * plugin)
 
   return gst_element_register (plugin, "rtph264depay",
       GST_RANK_SECONDARY, GST_TYPE_RTP_H264_DEPAY);
+}
+
+static gboolean
+gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
+{
+  GstRtpH264Depay *rtph264depay = GST_RTP_H264_DEPAY (depay);
+  GstClockTime ts = 0;
+  guint seq = 0;
+
+  const GstStructure *structure = gst_event_get_structure (event);
+  gst_structure_get_uint (structure, "seqnum", &seq);
+  gst_structure_get_uint64 (structure, "timestamp", &ts);
+
+  rtph264depay->lost_seq = seq;
+  rtph264depay->lost_ts = ts;
+
+  gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
+      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+          gst_structure_new_empty ("GstForceKeyUnit")));
+
+  return TRUE;
 }
