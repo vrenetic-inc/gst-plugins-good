@@ -1352,7 +1352,6 @@ gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
       gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
           gst_structure_new_empty ("GstForceKeyUnit")));
 
-  GST_RTP_BASE_DEPAYLOAD_CLASS (parent_class)->packet_lost (depay, event);
-
-  return TRUE;
+  return
+      GST_RTP_BASE_DEPAYLOAD_CLASS (parent_class)->packet_lost (depay, event);
 }
