@@ -42,6 +42,12 @@ GST_DEBUG_CATEGORY_STATIC (rtph264depay_debug);
 /* 3 zero bytes syncword */
 static const guint8 sync_bytes[] = { 0, 0, 0, 1 };
 
+enum
+{
+  PROP_0,
+  PROP_DROP_AFTER_GAP
+};
+
 static GstStaticPadTemplate gst_rtp_h264_depay_src_template =
     GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -93,6 +99,13 @@ static gboolean gst_rtp_h264_depay_setcaps (GstRTPBaseDepayload * filter,
     GstCaps * caps);
 static gboolean gst_rtp_h264_depay_handle_event (GstRTPBaseDepayload * depay,
     GstEvent * event);
+static gboolean gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay,
+    GstEvent * event);
+
+static void gst_rtp_h264_depay_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec);
+static void gst_rtp_h264_depay_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec);
 
 static void
 gst_rtp_h264_depay_class_init (GstRtpH264DepayClass * klass)
@@ -121,6 +134,15 @@ gst_rtp_h264_depay_class_init (GstRtpH264DepayClass * klass)
   gstrtpbasedepayload_class->process_rtp_packet = gst_rtp_h264_depay_process;
   gstrtpbasedepayload_class->set_caps = gst_rtp_h264_depay_setcaps;
   gstrtpbasedepayload_class->handle_event = gst_rtp_h264_depay_handle_event;
+  gstrtpbasedepayload_class->packet_lost = gst_rtp_h264_depay_packet_lost;
+
+  gobject_class->set_property = gst_rtp_h264_depay_set_property;
+  gobject_class->get_property = gst_rtp_h264_depay_get_property;
+
+  g_object_class_install_property (gobject_class, PROP_DROP_AFTER_GAP,
+      g_param_spec_boolean ("drop-after-gap", "Drop after gap",
+          "Skip frames between the gap and the next keyframe", FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
@@ -144,11 +166,14 @@ gst_rtp_h264_depay_reset (GstRtpH264Depay * rtph264depay)
   gst_adapter_clear (rtph264depay->picture_adapter);
   rtph264depay->picture_start = FALSE;
   rtph264depay->last_keyframe = FALSE;
+  rtph264depay->last_keyframe_ts = 0;
   rtph264depay->last_ts = 0;
   rtph264depay->current_fu_type = 0;
   rtph264depay->new_codec_data = FALSE;
   g_ptr_array_set_size (rtph264depay->sps, 0);
   g_ptr_array_set_size (rtph264depay->pps, 0);
+  rtph264depay->lost_seq = 0;
+  rtph264depay->lost_ts = 0;
 }
 
 static void
@@ -761,6 +786,13 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
 
   keyframe = NAL_TYPE_IS_KEY (nal_type);
 
+  if (rtph264depay->drop_after_gap &&
+      (in_timestamp == rtph264depay->lost_ts || (!keyframe &&
+              rtph264depay->lost_ts > rtph264depay->last_keyframe_ts))) {
+    GST_WARNING_OBJECT (depayload, "dropping NAL after gap");
+    goto drop_nal;
+  }
+
   out_keyframe = keyframe;
   out_timestamp = in_timestamp;
 
@@ -831,6 +863,8 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
     rtph264depay->last_ts = in_timestamp;
     rtph264depay->last_keyframe |= keyframe;
     rtph264depay->picture_start |= start;
+    rtph264depay->last_keyframe_ts =
+        keyframe ? in_timestamp : rtph264depay->last_keyframe_ts;
 
     if (marker)
       outbuf = gst_rtp_h264_complete_au (rtph264depay, &out_timestamp,
@@ -872,6 +906,9 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
 short_nal:
   {
     GST_WARNING_OBJECT (depayload, "dropping short NAL");
+  }
+drop_nal:
+  {
     gst_buffer_unmap (nal, &map);
     gst_buffer_unref (nal);
     return NULL;
@@ -1251,6 +1288,42 @@ gst_rtp_h264_depay_change_state (GstElement * element,
   return ret;
 }
 
+static void
+gst_rtp_h264_depay_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstRtpH264Depay *rtph264depay;
+
+  rtph264depay = GST_RTP_H264_DEPAY (object);
+
+  switch (prop_id) {
+    case PROP_DROP_AFTER_GAP:
+      rtph264depay->drop_after_gap = g_value_get_boolean (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_rtp_h264_depay_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec)
+{
+  GstRtpH264Depay *rtph264depay;
+
+  rtph264depay = GST_RTP_H264_DEPAY (object);
+
+  switch (prop_id) {
+    case PROP_DROP_AFTER_GAP:
+      g_value_set_boolean (value, rtph264depay->drop_after_gap);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
 gboolean
 gst_rtp_h264_depay_plugin_init (GstPlugin * plugin)
 {
@@ -1259,4 +1332,26 @@ gst_rtp_h264_depay_plugin_init (GstPlugin * plugin)
 
   return gst_element_register (plugin, "rtph264depay",
       GST_RANK_SECONDARY, GST_TYPE_RTP_H264_DEPAY);
+}
+
+static gboolean
+gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
+{
+  GstRtpH264Depay *rtph264depay = GST_RTP_H264_DEPAY (depay);
+  GstClockTime ts = 0;
+  guint seq = 0;
+
+  const GstStructure *structure = gst_event_get_structure (event);
+  gst_structure_get_uint (structure, "seqnum", &seq);
+  gst_structure_get_uint64 (structure, "timestamp", &ts);
+
+  rtph264depay->lost_seq = seq;
+  rtph264depay->lost_ts = ts;
+
+  gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
+      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+          gst_structure_new_empty ("GstForceKeyUnit")));
+
+  return
+      GST_RTP_BASE_DEPAYLOAD_CLASS (parent_class)->packet_lost (depay, event);
 }
