@@ -36,8 +36,12 @@ GST_DEBUG_CATEGORY_STATIC (rtph264depay_debug);
 
 /* This is what we'll default to when downstream hasn't
  * expressed a restriction or preference via caps */
-#define DEFAULT_BYTE_STREAM   TRUE
-#define DEFAULT_ACCESS_UNIT   FALSE
+#define DEFAULT_BYTE_STREAM        TRUE
+#define DEFAULT_ACCESS_UNIT        FALSE
+#define DEFAULT_DROP_AFTER_GAP     FALSE
+#define DEFAULT_PLI_RETRY_INTERVAL 800 /* ms */
+
+#define MAX_PLI_RETRY_INTERVAL     (60 * 1000) /* 1 min */
 
 /* 3 zero bytes syncword */
 static const guint8 sync_bytes[] = { 0, 0, 0, 1 };
@@ -45,7 +49,8 @@ static const guint8 sync_bytes[] = { 0, 0, 0, 1 };
 enum
 {
   PROP_0,
-  PROP_DROP_AFTER_GAP
+  PROP_DROP_AFTER_GAP,
+  PROP_PLI_RETRY_INTERVAL
 };
 
 static GstStaticPadTemplate gst_rtp_h264_depay_src_template =
@@ -140,9 +145,16 @@ gst_rtp_h264_depay_class_init (GstRtpH264DepayClass * klass)
   gobject_class->get_property = gst_rtp_h264_depay_get_property;
 
   g_object_class_install_property (gobject_class, PROP_DROP_AFTER_GAP,
-      g_param_spec_boolean ("drop-after-gap", "Drop after gap",
-          "Skip frames between the gap and the next keyframe", FALSE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+    g_param_spec_boolean ("drop-after-gap", "Drop after gap",
+      "Skip frames between the gap and the next keyframe",
+      DEFAULT_DROP_AFTER_GAP,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_PLI_RETRY_INTERVAL,
+    g_param_spec_uint64 ("pli-retry-interval", "PLI retry interval",
+      "Interval in milliseconds used to re-send the PLI message (0=disable)",
+      0, MAX_PLI_RETRY_INTERVAL, DEFAULT_PLI_RETRY_INTERVAL,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
@@ -156,6 +168,9 @@ gst_rtp_h264_depay_init (GstRtpH264Depay * rtph264depay)
       (GDestroyNotify) gst_buffer_unref);
   rtph264depay->pps = g_ptr_array_new_with_free_func (
       (GDestroyNotify) gst_buffer_unref);
+  rtph264depay->drop_after_gap = DEFAULT_DROP_AFTER_GAP;
+  rtph264depay->pli_retry_interval =
+      GST_MSECOND * DEFAULT_PLI_RETRY_INTERVAL;
 }
 
 static void
@@ -172,8 +187,8 @@ gst_rtp_h264_depay_reset (GstRtpH264Depay * rtph264depay)
   rtph264depay->new_codec_data = FALSE;
   g_ptr_array_set_size (rtph264depay->sps, 0);
   g_ptr_array_set_size (rtph264depay->pps, 0);
-  rtph264depay->lost_seq = 0;
-  rtph264depay->lost_ts = 0;
+  rtph264depay->lost_ts = GST_CLOCK_TIME_NONE;
+  rtph264depay->pli_retry_ts = GST_CLOCK_TIME_NONE;
 }
 
 static void
@@ -786,11 +801,41 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
 
   keyframe = NAL_TYPE_IS_KEY (nal_type);
 
-  if (rtph264depay->drop_after_gap &&
-      (in_timestamp == rtph264depay->lost_ts || (!keyframe &&
-              rtph264depay->lost_ts > rtph264depay->last_keyframe_ts))) {
-    GST_WARNING_OBJECT (depayload, "dropping NAL after gap");
-    goto drop_nal;
+  /* Check if we're in the state of packet loss */
+  if (GST_CLOCK_TIME_IS_VALID(in_timestamp) &&
+      GST_CLOCK_TIME_IS_VALID(rtph264depay->lost_ts)) {
+    /* Check if this packet belongs to the broken frame */
+    if (rtph264depay->lost_ts == in_timestamp ||
+        /* Or this packet comes after the broken one
+         * and still no full keyframe */
+        (!keyframe && rtph264depay->lost_ts > rtph264depay->last_keyframe_ts)) {
+
+      /* Part of a corrupted frame detected.
+       * Check if we need to retry sending PLI, which could have been lost
+       * during UDP retransmission. */
+      if (GST_CLOCK_TIME_IS_VALID(rtph264depay->pli_retry_ts) &&
+          rtph264depay->pli_retry_ts <= in_timestamp) {
+
+        gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depayload),
+          gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+            gst_structure_new ("GstForceKeyUnit",
+              "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
+
+        /* Set the next time point when we should re-send PLI */
+        /* pli_retry_interval could have changed in the meantime */
+        rtph264depay->pli_retry_ts = rtph264depay->pli_retry_interval
+          ? in_timestamp + rtph264depay->pli_retry_interval
+          : GST_CLOCK_TIME_NONE;
+
+        GST_WARNING_OBJECT (depayload, "PLI sent, but still no keyframe.");
+      }
+
+      /* Also check if we'd better not send the corrupt data downstream */
+      if (rtph264depay->drop_after_gap) {
+        GST_WARNING_OBJECT (depayload, "dropping NAL after gap");
+        goto drop_nal;
+      }
+    }
   }
 
   out_keyframe = keyframe;
@@ -863,8 +908,13 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
     rtph264depay->last_ts = in_timestamp;
     rtph264depay->last_keyframe |= keyframe;
     rtph264depay->picture_start |= start;
-    rtph264depay->last_keyframe_ts =
-        keyframe ? in_timestamp : rtph264depay->last_keyframe_ts;
+
+    if (keyframe) {
+        /* Keyframe arrived. Clear the loss state */
+        rtph264depay->last_keyframe_ts = in_timestamp;
+        rtph264depay->lost_ts = GST_CLOCK_TIME_NONE;
+        rtph264depay->pli_retry_ts = GST_CLOCK_TIME_NONE;
+    }
 
     if (marker)
       outbuf = gst_rtp_h264_complete_au (rtph264depay, &out_timestamp,
@@ -1300,6 +1350,10 @@ gst_rtp_h264_depay_set_property (GObject * object, guint prop_id,
     case PROP_DROP_AFTER_GAP:
       rtph264depay->drop_after_gap = g_value_get_boolean (value);
       break;
+    case PROP_PLI_RETRY_INTERVAL:
+      rtph264depay->pli_retry_interval =
+              GST_MSECOND * g_value_get_uint64 (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1317,6 +1371,10 @@ gst_rtp_h264_depay_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_DROP_AFTER_GAP:
       g_value_set_boolean (value, rtph264depay->drop_after_gap);
+      break;
+    case PROP_PLI_RETRY_INTERVAL:
+      g_value_set_uint64 (value,
+        GST_TIME_AS_MSECONDS(rtph264depay->pli_retry_interval));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1345,12 +1403,31 @@ gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
   gst_structure_get_uint (structure, "seqnum", &seq);
   gst_structure_get_uint64 (structure, "timestamp", &ts);
 
-  rtph264depay->lost_seq = seq;
-  rtph264depay->lost_ts = ts;
+  if (GST_CLOCK_TIME_IS_VALID(ts)) {
+    /* Only transmit the PLI message when that's the first loss which
+     * we didn't react to. Otherwise, let it slip - upstream should
+     * have already received our PLI request.
+     * However, if PLI re-send is not enabled (retry interval is set to 0),
+     * we fall back to reacting on every single loss */
+    if (!GST_CLOCK_TIME_IS_VALID(rtph264depay->lost_ts) ||
+        !rtph264depay->pli_retry_interval) {
 
+      rtph264depay->lost_ts = ts;
+      rtph264depay->pli_retry_ts = rtph264depay->pli_retry_interval
+        ? ts + rtph264depay->pli_retry_interval
+        : GST_CLOCK_TIME_NONE;
+    }
+  } else {
+    GST_WARNING_OBJECT (depay, "Packet lost with invalid timestamp");
+  }
+
+  /* Even if timestamp is unknown, fire the event
+   * Even though we might not be able to distinguish which packets to drop,
+   * the sooner we receive a full keyframe - the better */
   gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
-      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-          gst_structure_new_empty ("GstForceKeyUnit")));
+    gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+      gst_structure_new ("GstForceKeyUnit",
+        "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
 
   return
       GST_RTP_BASE_DEPAYLOAD_CLASS (parent_class)->packet_lost (depay, event);

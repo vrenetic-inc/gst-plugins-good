@@ -46,6 +46,7 @@ struct _GstRtpH264Depay
 
   gboolean    byte_stream;
   gboolean    drop_after_gap;
+  GstClockTime pli_retry_interval;
 
   GstBuffer  *codec_data;
   GstAdapter *adapter;
@@ -65,8 +66,8 @@ struct _GstRtpH264Depay
   gboolean fu_marker;
 
   /* lost packet */
-  guint lost_seq;
   GstClockTime lost_ts;
+  GstClockTime pli_retry_ts;
 
   /* misc */
   GPtrArray *sps;
