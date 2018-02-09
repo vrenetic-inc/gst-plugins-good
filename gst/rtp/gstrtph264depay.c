@@ -187,8 +187,8 @@ gst_rtp_h264_depay_reset (GstRtpH264Depay * rtph264depay)
   rtph264depay->new_codec_data = FALSE;
   g_ptr_array_set_size (rtph264depay->sps, 0);
   g_ptr_array_set_size (rtph264depay->pps, 0);
-  rtph264depay->lost_ts_plus1 = 0;
-  rtph264depay->pli_retry_ts = 0;
+  rtph264depay->lost_ts = GST_CLOCK_TIME_NONE;
+  rtph264depay->pli_retry_ts = GST_CLOCK_TIME_NONE;
 }
 
 static void
@@ -802,18 +802,18 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
   keyframe = NAL_TYPE_IS_KEY (nal_type);
 
   /* Check if we're in the state of packet loss */
-  if (rtph264depay->lost_ts_plus1) {
+  if (GST_CLOCK_TIME_IS_VALID(in_timestamp) &&
+      GST_CLOCK_TIME_IS_VALID(rtph264depay->lost_ts)) {
     /* Check if this packet belongs to the broken frame */
-    if (rtph264depay->lost_ts_plus1 - 1 == in_timestamp ||
+    if (rtph264depay->lost_ts == in_timestamp ||
         /* Or this packet comes after the broken one
          * and still no full keyframe */
-        (!keyframe && rtph264depay->lost_ts_plus1 - 1 >
-         rtph264depay->last_keyframe_ts)) {
+        (!keyframe && rtph264depay->lost_ts > rtph264depay->last_keyframe_ts)) {
 
       /* Part of a corrupted frame detected.
        * Check if we need to retry sending PLI, which could have been lost
        * during UDP retransmission. */
-      if (rtph264depay->pli_retry_ts &&
+      if (GST_CLOCK_TIME_IS_VALID(rtph264depay->pli_retry_ts) &&
           rtph264depay->pli_retry_ts <= in_timestamp) {
 
         gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depayload),
@@ -825,7 +825,7 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
         /* pli_retry_interval could have changed in the meantime */
         rtph264depay->pli_retry_ts = rtph264depay->pli_retry_interval
           ? in_timestamp + rtph264depay->pli_retry_interval
-          : 0;
+          : GST_CLOCK_TIME_NONE;
 
         GST_WARNING_OBJECT (depayload, "PLI sent, but still no keyframe.");
       }
@@ -912,8 +912,8 @@ gst_rtp_h264_depay_handle_nal (GstRtpH264Depay * rtph264depay, GstBuffer * nal,
     if (keyframe) {
         /* Keyframe arrived. Clear the loss state */
         rtph264depay->last_keyframe_ts = in_timestamp;
-        rtph264depay->lost_ts_plus1 = 0;
-        rtph264depay->pli_retry_ts = 0;
+        rtph264depay->lost_ts = GST_CLOCK_TIME_NONE;
+        rtph264depay->pli_retry_ts = GST_CLOCK_TIME_NONE;
     }
 
     if (marker)
@@ -1403,22 +1403,31 @@ gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
   gst_structure_get_uint (structure, "seqnum", &seq);
   gst_structure_get_uint64 (structure, "timestamp", &ts);
 
-  /* Only transmit the PLI message when that's the first loss which
-   * we didn't react to. Otherwise, let it slip - upstream should
-   * have already received our PLI request.
-   * However, if PLI re-send is not enabled (retry interval is set to 0),
-   * we fall back to reacting on every single loss */
-  if (!rtph264depay->lost_ts_plus1 || !rtph264depay->pli_retry_interval) {
+  if (GST_CLOCK_TIME_IS_VALID(ts)) {
+    /* Only transmit the PLI message when that's the first loss which
+     * we didn't react to. Otherwise, let it slip - upstream should
+     * have already received our PLI request.
+     * However, if PLI re-send is not enabled (retry interval is set to 0),
+     * we fall back to reacting on every single loss */
+    if (!GST_CLOCK_TIME_IS_VALID(rtph264depay->lost_ts) ||
+        !rtph264depay->pli_retry_interval) {
 
-    rtph264depay->lost_ts_plus1 = ts + 1;
-    rtph264depay->pli_retry_ts = rtph264depay->pli_retry_interval
-      ? ts + rtph264depay->pli_retry_interval : 0;
-
-    gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
-      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-        gst_structure_new ("GstForceKeyUnit",
-          "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
+      rtph264depay->lost_ts = ts;
+      rtph264depay->pli_retry_ts = rtph264depay->pli_retry_interval
+        ? ts + rtph264depay->pli_retry_interval
+        : GST_CLOCK_TIME_NONE;
+    }
+  } else {
+    GST_WARNING_OBJECT (depay, "Packet lost with invalid timestamp");
   }
+
+  /* Even if timestamp is unknown, fire the event
+   * Even though we might not be able to distinguish which packets to drop,
+   * the sooner we receive a full keyframe - the better */
+  gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
+    gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+      gst_structure_new ("GstForceKeyUnit",
+        "all-headers", G_TYPE_BOOLEAN, TRUE, NULL)));
 
   return
       GST_RTP_BASE_DEPAYLOAD_CLASS (parent_class)->packet_lost (depay, event);

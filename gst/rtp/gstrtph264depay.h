@@ -66,7 +66,7 @@ struct _GstRtpH264Depay
   gboolean fu_marker;
 
   /* lost packet */
-  GstClockTime lost_ts_plus1;
+  GstClockTime lost_ts;
   GstClockTime pli_retry_ts;
 
   /* misc */
