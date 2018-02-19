@@ -106,6 +106,8 @@ static void gst_rtp_h264_depay_push (GstRtpH264Depay * rtph264depay,
     gboolean marker);
 static gboolean gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay,
     GstEvent * event);
+static void gst_rtp_h264_depay_request_keyframe (GstRtpH264Depay *
+    rtph264depay);
 
 static void gst_rtp_h264_depay_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -179,6 +181,7 @@ gst_rtp_h264_depay_reset (GstRtpH264Depay * rtph264depay, gboolean hard)
   g_ptr_array_set_size (rtph264depay->pps, 0);
   rtph264depay->lost_seq = 0;
   rtph264depay->lost_ts = 0;
+  rtph264depay->keyframe_request_ts = 0;
 }
 
 static void
