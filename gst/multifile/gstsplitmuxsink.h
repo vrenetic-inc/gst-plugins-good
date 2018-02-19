@@ -123,6 +123,8 @@ struct _GstSplitMuxSink
 
   gboolean reset_muxer;
 
+  gboolean key_frame_fragmentation;
+
   GstElement *muxer;
   GstElement *sink;
 
