@@ -45,6 +45,7 @@ struct _GstRtpSession {
   GstPad        *recv_rtp_sink;
   GstSegment     recv_rtp_seg;
   GstPad        *recv_rtcp_sink;
+  GstSegment     recv_rtcp_seg;
   GstPad        *send_rtp_sink;
   GstSegment     send_rtp_seg;
 
