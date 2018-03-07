@@ -840,6 +840,7 @@ gst_rtp_session_init (GstRtpSession * rtpsession)
       (GDestroyNotify) gst_caps_unref);
 
   gst_segment_init (&rtpsession->recv_rtp_seg, GST_FORMAT_UNDEFINED);
+  gst_segment_init (&rtpsession->recv_rtcp_seg, GST_FORMAT_UNDEFINED);
   gst_segment_init (&rtpsession->send_rtp_seg, GST_FORMAT_UNDEFINED);
 
   rtpsession->priv->thread_stopped = TRUE;
@@ -1954,7 +1955,25 @@ gst_rtp_session_event_recv_rtcp_sink (GstPad * pad, GstObject * parent,
       GST_EVENT_TYPE_NAME (event));
 
   switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_FLUSH_STOP:
+      gst_segment_init (&rtpsession->recv_rtcp_seg, GST_FORMAT_UNDEFINED);
+      ret = gst_pad_push_event (rtpsession->sync_src, event);
+      break;
     case GST_EVENT_SEGMENT:
+    {
+      GstSegment *segment, in_segment;
+
+      segment = &rtpsession->recv_rtcp_seg;
+
+      /* the newsegment event is needed to convert the RTP timestamp to
+       * running_time, which is needed to generate a mapping from RTP to NTP
+       * timestamps in SR reports */
+      gst_event_copy_segment (event, &in_segment);
+      GST_DEBUG_OBJECT (rtpsession,
+          "received rtcp segment %" GST_SEGMENT_FORMAT, &in_segment);
+
+      /* accept upstream */
+      gst_segment_copy_into (&in_segment, segment);
       /* Make sure that the sync_src pad has caps before the segment event.
        * Otherwise we might get a segment event before caps from the receive
        * RTCP pad, and then later when receiving RTCP packets will set caps.
@@ -1966,6 +1985,7 @@ gst_rtp_session_event_recv_rtcp_sink (GstPad * pad, GstObject * parent,
         gst_caps_unref (caps);
       }
       /* fall through */
+    }
     default:
       ret = gst_pad_push_event (rtpsession->sync_src, event);
       break;
@@ -1983,7 +2003,8 @@ gst_rtp_session_chain_recv_rtcp (GstPad * pad, GstObject * parent,
 {
   GstRtpSession *rtpsession;
   GstRtpSessionPrivate *priv;
-  GstClockTime current_time;
+  GstClockTime current_time, running_time;
+  GstClockTime timestamp;
   guint64 ntpnstime;
 
   rtpsession = GST_RTP_SESSION (parent);
@@ -1995,10 +2016,21 @@ gst_rtp_session_chain_recv_rtcp (GstPad * pad, GstObject * parent,
   signal_waiting_rtcp_thread_unlocked (rtpsession);
   GST_RTP_SESSION_UNLOCK (rtpsession);
 
+  /* get NTP time when this packet was captured, this depends on the timestamp. */
+  timestamp = GST_BUFFER_PTS (buffer);
+  if (GST_CLOCK_TIME_IS_VALID (timestamp)) {
+    /* convert to running time using the segment values */
+    running_time =
+        gst_segment_to_running_time (&rtpsession->recv_rtcp_seg,
+        GST_FORMAT_TIME, timestamp);
+    ntpnstime = GST_CLOCK_TIME_NONE;
+  } else {
+    get_current_times (rtpsession, &running_time, &ntpnstime);
+  }
   current_time = gst_clock_get_time (priv->sysclock);
-  get_current_times (rtpsession, NULL, &ntpnstime);
 
-  rtp_session_process_rtcp (priv->session, buffer, current_time, ntpnstime);
+  rtp_session_process_rtcp (priv->session, buffer, current_time, running_time,
+      ntpnstime);
 
   return GST_FLOW_OK;           /* always return OK */
 }
