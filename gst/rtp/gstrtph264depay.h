@@ -68,6 +68,9 @@ struct _GstRtpH264Depay
   guint lost_seq;
   GstClockTime lost_ts;
 
+  /* keyframe request */
+  GstClockTime keyframe_request_ts;
+
   /* misc */
   GPtrArray *sps;
   GPtrArray *pps;

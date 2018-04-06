@@ -36,8 +36,9 @@ GST_DEBUG_CATEGORY_STATIC (rtph264depay_debug);
 
 /* This is what we'll default to when downstream hasn't
  * expressed a restriction or preference via caps */
-#define DEFAULT_BYTE_STREAM   TRUE
-#define DEFAULT_ACCESS_UNIT   FALSE
+#define DEFAULT_BYTE_STREAM          TRUE
+#define DEFAULT_ACCESS_UNIT          FALSE
+#define KEYFRAME_REQUEST_INTERVAL    (GST_MSECOND * 250)
 
 /* 3 zero bytes syncword */
 static const guint8 sync_bytes[] = { 0, 0, 0, 1 };
@@ -101,6 +102,7 @@ static gboolean gst_rtp_h264_depay_handle_event (GstRTPBaseDepayload * depay,
     GstEvent * event);
 static gboolean gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay,
     GstEvent * event);
+static void gst_rtp_h264_depay_request_keyframe (GstRtpH264Depay * rtph264depay);
 
 static void gst_rtp_h264_depay_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -174,6 +176,7 @@ gst_rtp_h264_depay_reset (GstRtpH264Depay * rtph264depay)
   g_ptr_array_set_size (rtph264depay->pps, 0);
   rtph264depay->lost_seq = 0;
   rtph264depay->lost_ts = 0;
+  rtph264depay->keyframe_request_ts = 0;
 }
 
 static void
@@ -911,6 +914,8 @@ drop_nal:
   {
     gst_buffer_unmap (nal, &map);
     gst_buffer_unref (nal);
+
+    gst_rtp_h264_depay_request_keyframe (rtph264depay);
     return NULL;
   }
 }
@@ -1348,10 +1353,27 @@ gst_rtp_h264_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
   rtph264depay->lost_seq = seq;
   rtph264depay->lost_ts = ts;
 
-  gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (depay),
-      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-          gst_structure_new_empty ("GstForceKeyUnit")));
+  gst_rtp_h264_depay_request_keyframe (rtph264depay);
 
   return
       GST_RTP_BASE_DEPAYLOAD_CLASS (parent_class)->packet_lost (depay, event);
+}
+
+static void
+gst_rtp_h264_depay_request_keyframe (GstRtpH264Depay * rtph264depay)
+{
+  GstClock *clock = gst_element_get_clock (GST_ELEMENT(rtph264depay));
+  GstClockTime now = 0;
+
+  if (clock) {
+    now = gst_clock_get_time (clock);
+  }
+    
+  if (now == 0 || rtph264depay->keyframe_request_ts == 0 ||
+      KEYFRAME_REQUEST_INTERVAL <= (now - rtph264depay->keyframe_request_ts)) {
+    rtph264depay->keyframe_request_ts = now;
+    gst_pad_push_event (GST_RTP_BASE_DEPAYLOAD_SINKPAD (rtph264depay),
+        gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+            gst_structure_new_empty ("GstForceKeyUnit")));
+  }
 }
