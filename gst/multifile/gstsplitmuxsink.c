@@ -80,7 +80,8 @@ enum
   PROP_MAX_FILES,
   PROP_MUXER_OVERHEAD,
   PROP_MUXER,
-  PROP_SINK
+  PROP_SINK,
+  PROP_KEY_FRAME_FRAGMENTATION
 };
 
 #define DEFAULT_MAX_SIZE_TIME       0
@@ -237,6 +238,10 @@ gst_splitmux_sink_class_init (GstSplitMuxSinkClass * klass)
           "Separator is assumed to be \":\" everywhere (e.g. 01:00:00:00). "
           "Will only be effective if a timecode track is present.",
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_KEY_FRAME_FRAGMENTATION,
+      g_param_spec_boolean ("key-frame-fragmentation",
+          "Key-frame fragmentation", "New file at each key frame", FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_SEND_KEYFRAME_REQUESTS,
       g_param_spec_boolean ("send-keyframe-requests",
           "Request keyframes at max-size-time",
@@ -422,6 +427,11 @@ gst_splitmux_sink_set_property (GObject * object, guint prop_id,
       gst_object_ref_sink (splitmux->provided_muxer);
       GST_OBJECT_UNLOCK (splitmux);
       break;
+    case PROP_KEY_FRAME_FRAGMENTATION:
+      GST_OBJECT_LOCK (splitmux);
+      splitmux->key_frame_fragmentation = g_value_get_boolean (value);
+      GST_OBJECT_UNLOCK (splitmux);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -478,6 +488,11 @@ gst_splitmux_sink_get_property (GObject * object, guint prop_id,
     case PROP_MUXER:
       GST_OBJECT_LOCK (splitmux);
       g_value_set_object (value, splitmux->provided_muxer);
+      GST_OBJECT_UNLOCK (splitmux);
+      break;
+    case PROP_KEY_FRAME_FRAGMENTATION:
+      GST_OBJECT_LOCK (splitmux);
+      g_value_set_boolean (value, splitmux->key_frame_fragmentation);
       GST_OBJECT_UNLOCK (splitmux);
       break;
     default:
@@ -639,7 +654,11 @@ complete_or_wait_on_out (GstSplitMuxSink * splitmux, MqStreamCtx * ctx)
         case SPLITMUX_OUTPUT_STATE_OUTPUT_GOP:
           /* We only get here if we've finished outputting a GOP and need to know
            * what to do next */
-          splitmux->output_state = SPLITMUX_OUTPUT_STATE_AWAITING_COMMAND;
+
+          if (splitmux->key_frame_fragmentation)
+            splitmux->output_state = SPLITMUX_OUTPUT_STATE_ENDING_FILE;
+          else
+            splitmux->output_state = SPLITMUX_OUTPUT_STATE_AWAITING_COMMAND;
           GST_SPLITMUX_BROADCAST_OUTPUT (splitmux);
           continue;
 

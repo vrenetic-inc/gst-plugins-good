@@ -118,6 +118,7 @@ struct _GstSplitMuxSink
   gboolean send_keyframe_requests;
   gchar *threshold_timecode_str;
   GstClockTime next_max_tc_time;
+  gboolean key_frame_fragmentation;
 
   GstElement *muxer;
   GstElement *sink;
