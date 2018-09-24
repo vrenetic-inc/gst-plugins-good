@@ -340,6 +340,17 @@ gst_core_audio_parse_channel_layout (AudioChannelLayout * layout,
   g_assert (channel_mask != NULL);
   g_assert (layout != NULL);
 
+  if (layout->mChannelLayoutTag == kAudioChannelLayoutTag_Stereo) {
+    if (pos) {
+      pos[0] = GST_AUDIO_CHANNEL_POSITION_FRONT_LEFT;
+      pos[1] = GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT;
+    }
+    *channels = 2;
+    *channel_mask = GST_AUDIO_CHANNEL_POSITION_MASK (FRONT_LEFT) |
+        GST_AUDIO_CHANNEL_POSITION_MASK (FRONT_RIGHT);
+    return TRUE;
+  }
+
   if (layout->mChannelLayoutTag !=
       kAudioChannelLayoutTag_UseChannelDescriptions) {
     GST_ERROR
@@ -400,6 +411,7 @@ GstCaps *
 gst_core_audio_asbd_to_caps (AudioStreamBasicDescription * asbd,
     AudioChannelLayout * layout)
 {
+  GstAudioChannelPosition pos[GST_OSX_AUDIO_MAX_CHANNEL];
   GstAudioInfo info;
   GstAudioFormat format = GST_AUDIO_FORMAT_UNKNOWN;
   guint rate, channels, bps, endianness;
@@ -457,14 +469,14 @@ gst_core_audio_asbd_to_caps (AudioStreamBasicDescription * asbd,
   }
 
   if (layout) {
-    GstAudioChannelPosition pos[GST_OSX_AUDIO_MAX_CHANNEL];
-
     if (!gst_core_audio_parse_channel_layout (layout, &channels, &channel_mask,
             pos)) {
       GST_WARNING ("Failed to parse channel layout");
-      goto error;
+      layout = NULL;;
     }
+  }
 
+  if (layout) {
     /* The AU can have arbitrary channel order, but we're using GstAudioInfo
      * which supports only the GStreamer channel order.
      * Also, we're eventually producing caps, which only have channel-mask
