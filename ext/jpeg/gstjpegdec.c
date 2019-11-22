@@ -894,6 +894,12 @@ gst_jpeg_dec_decode_direct (GstJpegDec * dec, GstVideoFrame * frame,
     }
   }
 
+  if (height % (v_samp[0] * DCTSIZE) && (dec->scratch_size < stride[0])) {
+    g_free (dec->scratch);
+    dec->scratch = g_malloc (stride[0]);
+    dec->scratch_size = stride[0];
+  }
+
   /* let jpeglib decode directly into our final buffer */
   GST_DEBUG_OBJECT (dec, "decoding directly into output buffer");
 
@@ -902,7 +908,7 @@ gst_jpeg_dec_decode_direct (GstJpegDec * dec, GstVideoFrame * frame,
       /* Y */
       line[0][j] = base[0] + (i + j) * stride[0];
       if (G_UNLIKELY (line[0][j] > last[0]))
-        line[0][j] = last[0];
+        line[0][j] = dec->scratch;
       /* U */
       if (v_samp[1] == v_samp[0]) {
         line[1][j] = base[1] + ((i + j) / 2) * stride[1];
@@ -910,7 +916,7 @@ gst_jpeg_dec_decode_direct (GstJpegDec * dec, GstVideoFrame * frame,
         line[1][j] = base[1] + ((i / 2) + j) * stride[1];
       }
       if (G_UNLIKELY (line[1][j] > last[1]))
-        line[1][j] = last[1];
+        line[1][j] = dec->scratch;
       /* V */
       if (v_samp[2] == v_samp[0]) {
         line[2][j] = base[2] + ((i + j) / 2) * stride[2];
@@ -918,7 +924,7 @@ gst_jpeg_dec_decode_direct (GstJpegDec * dec, GstVideoFrame * frame,
         line[2][j] = base[2] + ((i / 2) + j) * stride[2];
       }
       if (G_UNLIKELY (line[2][j] > last[2]))
-        line[2][j] = last[2];
+        line[2][j] = dec->scratch;
     }
 
     lines = jpeg_read_raw_data (&dec->cinfo, line, v_samp[0] * DCTSIZE);
@@ -1202,7 +1208,7 @@ gst_jpeg_dec_handle_frame (GstVideoDecoder * bdec, GstVideoCodecFrame * frame)
 
   data = dec->current_frame_map.data;
   nbytes = dec->current_frame_map.size;
-  has_eoi = ((data[nbytes - 2] != 0xff) || (data[nbytes - 1] != 0xd9));
+  has_eoi = ((data[nbytes - 2] == 0xff) && (data[nbytes - 1] == 0xd9));
 
   /* some cameras fail to send an end-of-image marker (EOI),
    * add it if that is the case. */
@@ -1250,6 +1256,7 @@ gst_jpeg_dec_handle_frame (GstVideoDecoder * bdec, GstVideoCodecFrame * frame)
   /* is it interlaced MJPEG? (we really don't want to scan the jpeg data
    * to see if there are two SOF markers in the packet to detect this) */
   if (gst_video_decoder_get_packetized (bdec) &&
+      dec->input_state &&
       dec->input_state->info.height > height &&
       dec->input_state->info.height <= (height * 2)
       && dec->input_state->info.width == width) {
@@ -1303,6 +1310,9 @@ gst_jpeg_dec_handle_frame (GstVideoDecoder * bdec, GstVideoCodecFrame * frame)
   /* decode second field if there is one */
   if (num_fields == 2) {
     GstVideoFormat field2_format;
+
+    /* Checked above before setting num_fields to 2 */
+    g_assert (dec->input_state != NULL);
 
     /* skip any chunk or padding bytes before the next SOI marker; both fields
      * are in one single buffer here, so direct access should be fine here */
@@ -1550,6 +1560,10 @@ gst_jpeg_dec_stop (GstVideoDecoder * bdec)
   GstJpegDec *dec = (GstJpegDec *) bdec;
 
   gst_jpeg_dec_free_buffers (dec);
+
+  g_free (dec->scratch);
+  dec->scratch = NULL;
+  dec->scratch_size = 0;
 
   return TRUE;
 }

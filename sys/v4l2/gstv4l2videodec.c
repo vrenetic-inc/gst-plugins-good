@@ -246,7 +246,8 @@ gst_v4l2_video_dec_set_format (GstVideoDecoder * decoder,
      * the complexity and should not have much impact in performance since the
      * following allocation query will happen on a drained pipeline and won't
      * block. */
-    if (!gst_v4l2_buffer_pool_orphan (&self->v4l2capture->pool)) {
+    if (self->v4l2capture->pool &&
+        !gst_v4l2_buffer_pool_orphan (&self->v4l2capture->pool)) {
       GstCaps *caps = gst_pad_get_current_caps (decoder->srcpad);
       if (caps) {
         GstQuery *query = gst_query_new_allocation (caps, FALSE);
@@ -417,7 +418,7 @@ done:
   return ret;
 }
 
-static gboolean
+static GstFlowReturn
 gst_v4l2_video_dec_drain (GstVideoDecoder * decoder)
 {
   GstV4l2VideoDec *self = GST_V4L2_VIDEO_DEC (decoder);
@@ -426,7 +427,7 @@ gst_v4l2_video_dec_drain (GstVideoDecoder * decoder)
   gst_v4l2_video_dec_finish (decoder);
   gst_v4l2_video_dec_flush (decoder);
 
-  return TRUE;
+  return GST_FLOW_OK;
 }
 
 static GstVideoCodecFrame *
